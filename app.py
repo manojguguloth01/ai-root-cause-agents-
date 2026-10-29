@@ -62,18 +62,41 @@ def explainer(title, text):
     st.markdown(f'<div class="explain"><b>{title}</b><br>{text}</div>', unsafe_allow_html=True)
 
 
-def line_chart(data, metric, height=300, threshold=None):
-    d = data[["minute", "service", metric]]
-    base = alt.Chart(d).mark_line(strokeWidth=2.2).encode(
-        x=alt.X("minute:Q", title="Minutes since start"),
-        y=alt.Y(f"{metric}:Q", title=metric),
+def incident_window(det_df):
+    sus = det_df[det_df["sustained"]]
+    if sus.empty:
+        return None
+    return int(sus["minute"].min()) - 2, int(sus["minute"].max())
+
+
+def line_chart(data, metric, height=320, threshold=None, smooth=1, window=None, affected=(), ytype="linear"):
+    d = data[["minute", "service", metric]].copy()
+    if smooth > 1:
+        d[metric] = d.groupby("service")[metric].transform(
+            lambda x: x.rolling(smooth, min_periods=1, center=True).mean())
+    d["status"] = d["service"].apply(lambda s: "Affected" if s in affected else "Healthy")
+    xtitle = "Minutes since start"
+    layers = []
+    if window:
+        w = pd.DataFrame({"x0": [window[0]], "x1": [window[1]]})
+        layers.append(alt.Chart(w).mark_rect(color="#ef4444", opacity=0.12).encode(
+            x=alt.X("x0:Q", title=xtitle), x2="x1:Q"))
+        layers.append(alt.Chart(w).mark_text(
+            align="left", dx=6, dy=12, color="#b91c1c", fontWeight="bold", fontSize=12).encode(
+            x=alt.X("x0:Q", title=xtitle), y=alt.value(0), text=alt.value("Incident window")))
+    layers.append(alt.Chart(d).mark_line().encode(
+        x=alt.X("minute:Q", title=xtitle),
+        y=alt.Y(f"{metric}:Q", title=metric, scale=alt.Scale(type=ytype)),
         color=alt.Color("service:N", scale=alt.Scale(scheme="category10"), title="Service"),
-        tooltip=["service", "minute", metric])
+        strokeWidth=alt.StrokeWidth("status:N", scale=alt.Scale(domain=["Affected", "Healthy"], range=[3, 1.2]),
+                                    legend=None),
+        opacity=alt.Opacity("status:N", scale=alt.Scale(domain=["Affected", "Healthy"], range=[1, 0.45]),
+                            legend=None),
+        tooltip=["service", "minute", alt.Tooltip(f"{metric}:Q", format=".1f")]))
     if threshold is not None:
-        rule = alt.Chart(pd.DataFrame({"y": [threshold]})).mark_rule(
-            color="#ef4444", strokeDash=[6, 4], strokeWidth=2).encode(y="y:Q")
-        base = base + rule
-    return base.properties(height=height, width="container")
+        layers.append(alt.Chart(pd.DataFrame({"y": [threshold]})).mark_rule(
+            color="#ef4444", strokeDash=[6, 4], strokeWidth=2).encode(y=alt.Y("y:Q", title=metric)))
+    return alt.layer(*layers).properties(height=height, width="container")
 
 
 # ---------------- Hero + what it does ----------------
@@ -164,9 +187,16 @@ with t1:
     explainer("What this step does",
               "The system collects logs and metrics (CPU, memory, response time, error rate and log events) from every "
               "service, removes duplicates and missing values, and sorts them by time. The chart shows how each "
-              "service behaved. Look for the lines that suddenly jump.")
-    metric = st.selectbox("Metric to plot", ["latency_ms", "error_rate", "cpu", "memory"])
-    st.altair_chart(line_chart(det, metric))
+              "service behaved. Look for the lines that suddenly jump. The red band shows the incident, and smoothing removes random noise.")
+    c1, c2 = st.columns([2, 1])
+    metric = c1.selectbox("Metric to plot", ["latency_ms", "error_rate", "cpu", "memory"])
+    smooth = c2.slider("Smoothing", 1, 9, 3, help="Averages nearby minutes to remove random noise. 1 = raw data.")
+    highlight = st.checkbox("Highlight the incident window and affected services", value=True)
+    affected = tuple(rc["onset"]) if (rc and highlight) else ()
+    window = incident_window(det) if highlight else None
+    st.altair_chart(line_chart(det, metric, smooth=smooth, window=window, affected=affected))
+    st.caption("Bold lines = services hit by the incident. Faint lines = healthy services. "
+               "The red band marks when the incident was active.")
     with st.expander("View raw records"):
         st.dataframe(det[["timestamp", "service", "cpu", "memory", "latency_ms", "error_rate", "event"]].head(300))
 
@@ -176,7 +206,9 @@ with t2:
               "<b>robust z-score</b> measures how far a reading is from normal. A minute is flagged only when both "
               "agree, and an incident is confirmed when it lasts <b>3 minutes in a row</b>, which filters out random "
               "blips. The dashed red line is the threshold.")
-    st.altair_chart(line_chart(det, "max_z", threshold=4))
+    st.altair_chart(line_chart(det, "max_z", threshold=4, ytype="symlog",
+                               window=incident_window(det), affected=tuple(rc["onset"]) if rc else ()))
+    st.caption("Deviation score per service (log scale). Anything above the dashed line is abnormal.")
     with st.expander("View flagged records"):
         st.dataframe(det[det.anomaly][["timestamp", "service", "top_metric", "max_z", "event"]].head(200))
 
