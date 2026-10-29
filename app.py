@@ -76,17 +76,19 @@ def line_chart(data, metric, height=320, threshold=None, smooth=1, window=None, 
             lambda x: x.rolling(smooth, min_periods=1, center=True).mean())
     d["status"] = d["service"].apply(lambda s: "Affected" if s in affected else "Healthy")
     xtitle = "Minutes since start"
+    yscale = (alt.Scale(type=ytype, domain=[0, float(d[metric].max()) * 1.15])
+              if ytype == "linear" else alt.Scale(type=ytype))
     layers = []
     if window:
         w = pd.DataFrame({"x0": [window[0]], "x1": [window[1]]})
         layers.append(alt.Chart(w).mark_rect(color="#ef4444", opacity=0.12).encode(
-            x=alt.X("x0:Q", title=xtitle), x2="x1:Q"))
+            x=alt.X("x0:Q", title=xtitle), x2="x1:Q", tooltip=alt.value(None)))
         layers.append(alt.Chart(w).mark_text(
             align="left", dx=6, dy=12, color="#b91c1c", fontWeight="bold", fontSize=12).encode(
-            x=alt.X("x0:Q", title=xtitle), y=alt.value(0), text=alt.value("Incident window")))
+            x=alt.X("x0:Q", title=xtitle), y=alt.value(0), text=alt.value("Incident window"), tooltip=alt.value(None)))
     layers.append(alt.Chart(d).mark_line().encode(
         x=alt.X("minute:Q", title=xtitle),
-        y=alt.Y(f"{metric}:Q", title=metric, scale=alt.Scale(type=ytype)),
+        y=alt.Y(f"{metric}:Q", title=metric, scale=yscale),
         color=alt.Color("service:N", scale=alt.Scale(scheme="category10"), title="Service"),
         strokeWidth=alt.StrokeWidth("status:N", scale=alt.Scale(domain=["Affected", "Healthy"], range=[3, 1.2]),
                                     legend=None),
