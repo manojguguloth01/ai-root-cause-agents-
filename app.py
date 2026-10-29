@@ -76,8 +76,8 @@ def line_chart(data, metric, height=320, threshold=None, smooth=1, window=None, 
             lambda x: x.rolling(smooth, min_periods=1, center=True).mean())
     d["status"] = d["service"].apply(lambda s: "Affected" if s in affected else "Healthy")
     xtitle = "Minutes since start"
-    yscale = (alt.Scale(type=ytype, domain=[0, float(d[metric].max()) * 1.15])
-              if ytype == "linear" else alt.Scale(type=ytype))
+    headroom = 1.15 if ytype == "linear" else 1.6
+    yscale = alt.Scale(type=ytype, domain=[0, float(d[metric].max()) * headroom])
     layers = []
     if window:
         w = pd.DataFrame({"x0": [window[0]], "x1": [window[1]]})
